@@ -167,6 +167,8 @@ st.title("Peta Wilayah Tugas PPL, PML & PJ Kuda - Kab. Sanggau")
 
 st.sidebar.header("Opsi Tampilan")
 show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
+show_table = st.sidebar.toggle("Tampilkan Tabel Data", value=False)
+show_legend = st.sidebar.toggle("Tampilkan Legenda Warna", value=True)
 
 st.sidebar.header("Filter")
 filter_level = st.sidebar.radio("Filter berdasarkan:", ["Semua", "Kecamatan", "Desa", "PPL", "PML", "PJ Kuda"])
@@ -217,24 +219,26 @@ col2.metric("PPL", len(set(f["properties"]["PPL Baru"] for f in filtered)))
 col3.metric("PML", len(set(f["properties"]["PML Baru"] for f in filtered)))
 col4.metric("PJ Kuda", len(set(f["properties"]["PJ KUDA"] for f in filtered)))
 
-st.subheader("Legenda Warna PPL")
-legend_html = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>"
-for ppl_name in ppl_unique:
-    color = colormap_ppl[ppl_name]
-    count = sum(1 for f in filtered if f["properties"]["PPL Baru"] == ppl_name)
-    legend_html += f"<div style='display:flex;align-items:center;gap:5px;background:#f0f0f0;padding:4px 10px;border-radius:5px;border-left:4px solid {color}'><b style='color:{color}'>●</b> {ppl_name} ({count})</div>"
-legend_html += "</div>"
-st.markdown(legend_html, unsafe_allow_html=True)
+if show_legend:
+    st.subheader("Legenda Warna PPL")
+    legend_html = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>"
+    for ppl_name in ppl_unique:
+        color = colormap_ppl[ppl_name]
+        count = sum(1 for f in filtered if f["properties"]["PPL Baru"] == ppl_name)
+        legend_html += f"<div style='display:flex;align-items:center;gap:5px;background:#f0f0f0;padding:4px 10px;border-radius:5px;border-left:4px solid {color}'><b style='color:{color}'>●</b> {ppl_name} ({count})</div>"
+    legend_html += "</div>"
+    st.markdown(legend_html, unsafe_allow_html=True)
 
-st.subheader("Tabel Data Wilayah Tugas")
-rows = []
-for feat in filtered:
-    p = feat["properties"]
-    rows.append({
-        "PPL": p.get("PPL Baru", "-"), "PML": p.get("PML Baru", "-"),
-        "PJ Kuda": p.get("PJ KUDA", "-"), "Ketua SLS": p.get("nama_ketua", "-"),
-        "Nama SLS": p.get("nmsls", "-"), "Desa": p.get("nmdesa", "-"),
-        "Kecamatan": p.get("nmkec", "-"), "ID SubSLS": p.get("idsubsls", "-"),
-        "Luas (ha)": round(p.get("luas", 0), 3),
-    })
-st.dataframe(pd.DataFrame(rows), use_container_width=True, height=400)
+if show_table:
+    with st.expander("Tabel Data Wilayah Tugas", expanded=False):
+        rows = []
+        for feat in filtered:
+            p = feat["properties"]
+            rows.append({
+                "PPL": p.get("PPL Baru", "-"), "PML": p.get("PML Baru", "-"),
+                "PJ Kuda": p.get("PJ KUDA", "-"), "Ketua SLS": p.get("nama_ketua", "-"),
+                "Nama SLS": p.get("nmsls", "-"), "Desa": p.get("nmdesa", "-"),
+                "Kecamatan": p.get("nmkec", "-"), "ID SubSLS": p.get("idsubsls", "-"),
+                "Luas (ha)": round(p.get("luas", 0), 3),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=400)
