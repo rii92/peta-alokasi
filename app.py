@@ -1,5 +1,4 @@
 import streamlit as st
-import geopandas as gpd
 import pandas as pd
 import folium
 from folium import DivIcon
@@ -19,28 +18,51 @@ CMAP = [
 ]
 
 
+def flatten_coords(coords):
+    pts = []
+    for item in coords:
+        if isinstance(item[0], (int, float)):
+            pts.append(item[:2])
+        else:
+            pts.extend(flatten_coords(item))
+    return pts
+
+
+def centroid_from_coords(coords):
+    pts = flatten_coords(coords)
+    if not pts:
+        return 0.0, 0.0
+    return sum(p[1] for p in pts) / len(pts), sum(p[0] for p in pts) / len(pts)
+
+
 @st.cache_data
 def load_data():
-    gdf = gpd.read_file(GEOJSON_PATH)
+    with open(GEOJSON_PATH, "r", encoding="utf-8") as f:
+        geojson = json.load(f)
     xl = pd.read_excel(EXCEL_PATH)
     xl["idsubsls"] = xl["idsubsls"].astype(str).str.strip()
-    gdf["idsubsls"] = gdf["idsubsls"].astype(str).str.strip()
-    df = gdf.merge(
-        xl[["idsubsls", "PPL Baru", "PML Baru", "PJ KUDA", "nama_ketua"]].drop_duplicates(subset="idsubsls"),
-        on="idsubsls", how="inner",
-    )
-    df["luas"] = pd.to_numeric(df["luas"], errors="coerce")
-    df["centroid_lat"] = df.geometry.centroid.y
-    df["centroid_lon"] = df.geometry.centroid.x
-    centroid = df.geometry.to_crs(epsg=3857).unary_union.centroid
-    clat, clon = gpd.GeoSeries([centroid], crs="EPSG:3857").to_crs(epsg=4326).iloc[0].coords[0][::-1]
-    geojson_full = json.loads(df.to_json())
-    ppl_list = sorted(df["PPL Baru"].unique())
-    colormap = {name: CMAP[i % len(CMAP)] for i, name in enumerate(ppl_list)}
-    return df, clat, clon, geojson_full, colormap
+    alloc = xl[["idsubsls", "PPL Baru", "PML Baru", "PJ KUDA", "nama_ketua"]].drop_duplicates(subset="idsubsls")
+    alloc_map = alloc.set_index("idsubsls").to_dict("index")
+    features = []
+    for feat in geojson["features"]:
+        sid = str(feat["properties"]["idsubsls"]).strip()
+        if sid not in alloc_map:
+            continue
+        props = feat["properties"].copy()
+        props.update(alloc_map[sid])
+        clat, clon = centroid_from_coords(feat["geometry"]["coordinates"])
+        props["centroid_lat"] = clat
+        props["centroid_lon"] = clon
+        props["luas"] = float(props.get("luas") or 0)
+        features.append({"type": "Feature", "properties": props, "geometry": feat["geometry"]})
+    all_lats = [f["properties"]["centroid_lat"] for f in features]
+    all_lons = [f["properties"]["centroid_lon"] for f in features]
+    map_lat = sum(all_lats) / len(all_lats) if all_lats else 0
+    map_lon = sum(all_lons) / len(all_lons) if all_lons else 0
+    return features, map_lat, map_lon
 
 
-def build_map(map_lat, map_lon, geojson_data, colormap, show_label):
+def build_map(map_lat, map_lon, features, colormap, show_label):
     m = folium.Map(location=[map_lat, map_lon], zoom_start=11, tiles=None)
 
     folium.TileLayer(
@@ -73,13 +95,12 @@ def build_map(map_lat, map_lon, geojson_data, colormap, show_label):
 
     ppl_unique = sorted(colormap.keys())
     for ppl_name in ppl_unique:
-        filtered = [f for f in geojson_data["features"] if f["properties"]["PPL Baru"] == ppl_name]
+        filtered = [f for f in features if f["properties"]["PPL Baru"] == ppl_name]
         fg = folium.FeatureGroup(name=f"PPL: {ppl_name} ({len(filtered)} subSLS)")
         if filtered:
+            fc = {"type": "FeatureCollection", "features": filtered}
             folium.GeoJson(
-                {"type": "FeatureCollection", "features": filtered},
-                style_function=style_fn,
-                highlight_function=highlight_fn,
+                fc, style_function=style_fn, highlight_function=highlight_fn,
                 tooltip=folium.GeoJsonTooltip(
                     fields=tooltip_fields, aliases=tooltip_aliases,
                     localize=True, sticky=True, style=tooltip_style,
@@ -88,8 +109,8 @@ def build_map(map_lat, map_lon, geojson_data, colormap, show_label):
         fg.add_to(m)
 
     mc = MarkerCluster(name="Titik Pusat SubSLS").add_to(m)
-    for feature in geojson_data["features"]:
-        props = feature["properties"]
+    for feat in features:
+        props = feat["properties"]
         ppl = props["PPL Baru"]
         color = colormap.get(ppl, "#999999")
         luas_val = round(props["luas"], 3) if props.get("luas") else "-"
@@ -109,8 +130,8 @@ def build_map(map_lat, map_lon, geojson_data, colormap, show_label):
     if show_label:
         fg_label = folium.FeatureGroup(name="Label Nama PPL", show=True)
         ppl_agg = {}
-        for f in geojson_data["features"]:
-            p = f["properties"]
+        for feat in features:
+            p = feat["properties"]
             pn = p["PPL Baru"]
             if pn not in ppl_agg:
                 ppl_agg[pn] = {"lats": [], "lons": [], "n": 0}
@@ -137,7 +158,10 @@ def build_map(map_lat, map_lon, geojson_data, colormap, show_label):
     return m.get_root().render()
 
 
-df, map_lat, map_lon, geojson_full, colormap_ppl = load_data()
+features_all, map_lat, map_lon = load_data()
+
+ppl_all = sorted(set(f["properties"]["PPL Baru"] for f in features_all))
+colormap_ppl = {name: CMAP[i % len(CMAP)] for i, name in enumerate(ppl_all)}
 
 st.title("Peta Wilayah Tugas PPL, PML & PJ Kuda - Kab. Sanggau")
 
@@ -147,65 +171,70 @@ show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
 st.sidebar.header("Filter")
 filter_level = st.sidebar.radio("Filter berdasarkan:", ["Semua", "Kecamatan", "Desa", "PPL", "PML", "PJ Kuda"])
 
+filtered = features_all
+
 if filter_level == "Kecamatan":
-    kec_list = sorted(df["nmkec"].dropna().unique())
+    kec_list = sorted(set(f["properties"]["nmkec"] for f in filtered if f["properties"].get("nmkec")))
     selected_kec = st.sidebar.multiselect("Pilih Kecamatan:", kec_list, default=kec_list[:3])
-    df = df[df["nmkec"].isin(selected_kec)]
+    filtered = [f for f in filtered if f["properties"].get("nmkec") in selected_kec]
 elif filter_level == "Desa":
-    kec_list = sorted(df["nmkec"].dropna().unique())
+    kec_list = sorted(set(f["properties"]["nmkec"] for f in features_all if f["properties"].get("nmkec")))
     selected_kec = st.sidebar.selectbox("Pilih Kecamatan:", ["Semua"] + kec_list)
     if selected_kec != "Semua":
-        df = df[df["nmkec"] == selected_kec]
-    desa_list = sorted(df["nmdesa"].dropna().unique())
+        filtered = [f for f in filtered if f["properties"].get("nmkec") == selected_kec]
+    desa_list = sorted(set(f["properties"]["nmdesa"] for f in filtered if f["properties"].get("nmdesa")))
     selected_desa = st.sidebar.multiselect("Pilih Desa:", desa_list, default=desa_list[:5])
-    df = df[df["nmdesa"].isin(selected_desa)]
+    filtered = [f for f in filtered if f["properties"].get("nmdesa") in selected_desa]
 elif filter_level == "PPL":
-    ppl_list = sorted(df["PPL Baru"].dropna().unique())
+    ppl_list = sorted(set(f["properties"]["PPL Baru"] for f in filtered))
     selected_ppl = st.sidebar.multiselect("Pilih PPL:", ppl_list, default=ppl_list[:5])
-    df = df[df["PPL Baru"].isin(selected_ppl)]
+    filtered = [f for f in filtered if f["properties"]["PPL Baru"] in selected_ppl]
 elif filter_level == "PML":
-    pml_list = sorted(df["PML Baru"].dropna().unique())
+    pml_list = sorted(set(f["properties"]["PML Baru"] for f in filtered))
     selected_pml = st.sidebar.multiselect("Pilih PML:", pml_list, default=pml_list[:5])
-    df = df[df["PML Baru"].isin(selected_pml)]
+    filtered = [f for f in filtered if f["properties"]["PML Baru"] in selected_pml]
 elif filter_level == "PJ Kuda":
-    pjk_list = sorted(df["PJ KUDA"].dropna().unique())
+    pjk_list = sorted(set(f["properties"]["PJ KUDA"] for f in filtered))
     selected_pjk = st.sidebar.multiselect("Pilih PJ Kuda:", pjk_list, default=pjk_list)
-    df = df[df["PJ KUDA"].isin(selected_pjk)]
+    filtered = [f for f in filtered if f["properties"]["PJ KUDA"] in selected_pjk]
 
-if len(df) == 0:
+if not filtered:
     st.warning("Tidak ada data yang cocok dengan filter yang dipilih.")
     st.stop()
 
-st.caption(f"Menampilkan {len(df)} subSLS teralokasi dari {df['nmkec'].nunique()} kecamatan")
+st.caption(f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan")
 
-ppl_unique = sorted(df["PPL Baru"].unique())
+ppl_unique = sorted(set(f["properties"]["PPL Baru"] for f in filtered))
 colormap_filtered = {k: v for k, v in colormap_ppl.items() if k in ppl_unique}
-geojson_filtered = {"type": "FeatureCollection", "features": [
-    f for f in geojson_full["features"] if f["properties"]["PPL Baru"] in ppl_unique
-]}
 
-map_html = build_map(map_lat, map_lon, geojson_filtered, colormap_filtered, show_ppl_label)
+map_html = build_map(map_lat, map_lon, filtered, colormap_filtered, show_ppl_label)
 st.components.v1.html(map_html, width=1400, height=750, scrolling=False)
 
 st.markdown("---")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("SubSLS Teralokasi", len(df))
-col2.metric("PPL", df["PPL Baru"].nunique())
-col3.metric("PML", df["PML Baru"].nunique())
-col4.metric("PJ Kuda", df["PJ KUDA"].nunique())
+col1.metric("SubSLS Teralokasi", len(filtered))
+col2.metric("PPL", len(set(f["properties"]["PPL Baru"] for f in filtered)))
+col3.metric("PML", len(set(f["properties"]["PML Baru"] for f in filtered)))
+col4.metric("PJ Kuda", len(set(f["properties"]["PJ KUDA"] for f in filtered)))
 
 st.subheader("Legenda Warna PPL")
 legend_html = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>"
 for ppl_name in ppl_unique:
     color = colormap_ppl[ppl_name]
-    count = len(df[df["PPL Baru"] == ppl_name])
+    count = sum(1 for f in filtered if f["properties"]["PPL Baru"] == ppl_name)
     legend_html += f"<div style='display:flex;align-items:center;gap:5px;background:#f0f0f0;padding:4px 10px;border-radius:5px;border-left:4px solid {color}'><b style='color:{color}'>●</b> {ppl_name} ({count})</div>"
 legend_html += "</div>"
 st.markdown(legend_html, unsafe_allow_html=True)
 
 st.subheader("Tabel Data Wilayah Tugas")
-st.dataframe(df[["PPL Baru", "PML Baru", "PJ KUDA", "nama_ketua", "nmsls", "nmdesa", "nmkec", "idsubsls", "luas"]].rename(columns={
-    "PPL Baru": "PPL", "PML Baru": "PML", "PJ KUDA": "PJ Kuda",
-    "nama_ketua": "Ketua SLS", "nmsls": "Nama SLS", "nmdesa": "Desa",
-    "nmkec": "Kecamatan", "idsubsls": "ID SubSLS", "luas": "Luas (ha)"
-}).style.format({"Luas (ha)": "{:.3f}"}), use_container_width=True, height=400)
+rows = []
+for feat in filtered:
+    p = feat["properties"]
+    rows.append({
+        "PPL": p.get("PPL Baru", "-"), "PML": p.get("PML Baru", "-"),
+        "PJ Kuda": p.get("PJ KUDA", "-"), "Ketua SLS": p.get("nama_ketua", "-"),
+        "Nama SLS": p.get("nmsls", "-"), "Desa": p.get("nmdesa", "-"),
+        "Kecamatan": p.get("nmkec", "-"), "ID SubSLS": p.get("idsubsls", "-"),
+        "Luas (ha)": round(p.get("luas", 0), 3),
+    })
+st.dataframe(pd.DataFrame(rows), use_container_width=True, height=400)
