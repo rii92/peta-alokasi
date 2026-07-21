@@ -4,47 +4,43 @@ import pandas as pd
 import folium
 from folium import DivIcon
 from folium.plugins import MarkerCluster
-from streamlit_folium import st_folium
 import json
 
 st.set_page_config(page_title="Peta Wilayah Tugas Mitra - Sanggau", layout="wide")
 
+GEOJSON_PATH = "Final_SLS_202516105.geojson"
+EXCEL_PATH = "data-alokasi-petugas.xlsx"
+CMAP = [
+    "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+    "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
+    "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
+    "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9",
+    "#e6beff", "#1ce6ff", "#ff34ff", "#ff4a46", "#008941",
+]
+
 
 @st.cache_data
 def load_data():
-    gdf = gpd.read_file("Final_SLS_202516105.geojson")
-    xl = pd.read_excel("data-alokasi-petugas.xlsx")
+    gdf = gpd.read_file(GEOJSON_PATH)
+    xl = pd.read_excel(EXCEL_PATH)
     xl["idsubsls"] = xl["idsubsls"].astype(str).str.strip()
     gdf["idsubsls"] = gdf["idsubsls"].astype(str).str.strip()
-    cols = ["idsubsls", "PPL Baru", "PML Baru", "PJ KUDA", "nama_ketua"]
-    df = gdf.merge(xl[cols].drop_duplicates(subset="idsubsls"), on="idsubsls", how="inner")
+    df = gdf.merge(
+        xl[["idsubsls", "PPL Baru", "PML Baru", "PJ KUDA", "nama_ketua"]].drop_duplicates(subset="idsubsls"),
+        on="idsubsls", how="inner",
+    )
     df["luas"] = pd.to_numeric(df["luas"], errors="coerce")
     df["centroid_lat"] = df.geometry.centroid.y
     df["centroid_lon"] = df.geometry.centroid.x
     centroid = df.geometry.to_crs(epsg=3857).unary_union.centroid
     clat, clon = gpd.GeoSeries([centroid], crs="EPSG:3857").to_crs(epsg=4326).iloc[0].coords[0][::-1]
-    geojson_data = json.loads(df.to_json())
-    return df, clat, clon, geojson_data
+    geojson_full = json.loads(df.to_json())
+    ppl_list = sorted(df["PPL Baru"].unique())
+    colormap = {name: CMAP[i % len(CMAP)] for i, name in enumerate(ppl_list)}
+    return df, clat, clon, geojson_full, colormap
 
 
-@st.cache_data
-def build_ppl_color_map(ppl_list):
-    cmap = [
-        "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-        "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
-        "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
-        "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9",
-        "#e6beff", "#1ce6ff", "#ff34ff", "#ff4a46", "#008941",
-    ]
-    return {name: cmap[i % len(cmap)] for i, name in enumerate(sorted(ppl_list))}
-
-
-@st.cache_data
-def build_map_html(map_lat, map_lon, geojson_str, ppl_json, colormap_json, show_label):
-    geojson_data = json.loads(geojson_str)
-    colormap = json.loads(ppl_json)
-    ppl_unique = sorted(colormap.keys())
-
+def build_map(map_lat, map_lon, geojson_data, colormap, show_label):
     m = folium.Map(location=[map_lat, map_lon], zoom_start=11, tiles=None)
 
     folium.TileLayer(
@@ -75,10 +71,10 @@ def build_map_html(map_lat, map_lon, geojson_str, ppl_json, colormap_json, show_
     def highlight_fn(feature):
         return {"fillOpacity": 0.85, "weight": 2.5, "color": "#000000"}
 
+    ppl_unique = sorted(colormap.keys())
     for ppl_name in ppl_unique:
         filtered = [f for f in geojson_data["features"] if f["properties"]["PPL Baru"] == ppl_name]
-        count = len(filtered)
-        fg = folium.FeatureGroup(name=f"PPL: {ppl_name} ({count} subSLS)")
+        fg = folium.FeatureGroup(name=f"PPL: {ppl_name} ({len(filtered)} subSLS)")
         if filtered:
             folium.GeoJson(
                 {"type": "FeatureCollection", "features": filtered},
@@ -95,8 +91,6 @@ def build_map_html(map_lat, map_lon, geojson_str, ppl_json, colormap_json, show_
     for feature in geojson_data["features"]:
         props = feature["properties"]
         ppl = props["PPL Baru"]
-        clat = props["centroid_lat"]
-        clon = props["centroid_lon"]
         color = colormap.get(ppl, "#999999")
         luas_val = round(props["luas"], 3) if props.get("luas") else "-"
         popup_html = f"""<div style='font-family:Arial;min-width:250px'>
@@ -106,7 +100,7 @@ def build_map_html(map_lat, map_lon, geojson_str, ppl_json, colormap_json, show_
             <b>Desa:</b> {props.get('nmdesa','-')}<br><b>Kec:</b> {props.get('nmkec','-')}<br>
             <b>ID:</b> {props.get('idsubsls','-')}<br><b>Luas:</b> {luas_val} ha</div>"""
         folium.CircleMarker(
-            location=[clat, clon], radius=4,
+            location=[props["centroid_lat"], props["centroid_lon"]], radius=4,
             color=color, fill=True, fill_color=color, fill_opacity=0.8,
             popup=folium.Popup(popup_html, max_width=300),
             tooltip=f"{props.get('nmsls','-')} - {ppl}",
@@ -114,30 +108,27 @@ def build_map_html(map_lat, map_lon, geojson_str, ppl_json, colormap_json, show_
 
     if show_label:
         fg_label = folium.FeatureGroup(name="Label Nama PPL", show=True)
-        ppl_centroids = {}
+        ppl_agg = {}
         for f in geojson_data["features"]:
             p = f["properties"]
-            pname = p["PPL Baru"]
-            if pname not in ppl_centroids:
-                ppl_centroids[pname] = {"lats": [], "lons": [], "count": 0}
-            ppl_centroids[pname]["lats"].append(p["centroid_lat"])
-            ppl_centroids[pname]["lons"].append(p["centroid_lon"])
-            ppl_centroids[pname]["count"] += 1
-        label_agg = pd.DataFrame([
-            {"PPL Baru": k, "lat": sum(v["lats"])/len(v["lats"]),
-             "lon": sum(v["lons"])/len(v["lons"]), "count": v["count"]}
-            for k, v in ppl_centroids.items()
-        ])
-        for _, row in label_agg.iterrows():
-            color = colormap.get(row["PPL Baru"], "#999999")
+            pn = p["PPL Baru"]
+            if pn not in ppl_agg:
+                ppl_agg[pn] = {"lats": [], "lons": [], "n": 0}
+            ppl_agg[pn]["lats"].append(p["centroid_lat"])
+            ppl_agg[pn]["lons"].append(p["centroid_lon"])
+            ppl_agg[pn]["n"] += 1
+        for pn, v in ppl_agg.items():
+            avg_lat = sum(v["lats"]) / len(v["lats"])
+            avg_lon = sum(v["lons"]) / len(v["lons"])
+            color = colormap.get(pn, "#999999")
             label_html = f"""<div style="
                 background-color:{color};color:white;font-weight:bold;font-size:12px;
                 padding:3px 8px;border-radius:4px;white-space:nowrap;
                 border:2px solid white;box-shadow:1px 1px 3px rgba(0,0,0,0.5);
                 font-family:Arial;text-align:center;line-height:1.2;
-            ">{row['PPL Baru']}<br><span style="font-size:10px;font-weight:normal">({int(row['count'])} subSLS)</span></div>"""
+            ">{pn}<br><span style="font-size:10px;font-weight:normal">({v['n']} subSLS)</span></div>"""
             folium.Marker(
-                location=[row["lat"], row["lon"]],
+                location=[avg_lat, avg_lon],
                 icon=DivIcon(html=label_html, icon_size=(180, 30), icon_anchor=(90, 15)),
             ).add_to(fg_label)
         fg_label.add_to(m)
@@ -146,11 +137,9 @@ def build_map_html(map_lat, map_lon, geojson_str, ppl_json, colormap_json, show_
     return m.get_root().render()
 
 
-df, map_lat, map_lon, geojson_data_raw = load_data()
-colormap_ppl = build_ppl_color_map(df["PPL Baru"].unique())
+df, map_lat, map_lon, geojson_full, colormap_ppl = load_data()
 
 st.title("Peta Wilayah Tugas PPL, PML & PJ Kuda - Kab. Sanggau")
-st.caption(f"Menampilkan {len(df)} subSLS teralokasi dari {df['nmkec'].nunique()} kecamatan")
 
 st.sidebar.header("Opsi Tampilan")
 show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
@@ -187,18 +176,15 @@ if len(df) == 0:
     st.warning("Tidak ada data yang cocok dengan filter yang dipilih.")
     st.stop()
 
+st.caption(f"Menampilkan {len(df)} subSLS teralokasi dari {df['nmkec'].nunique()} kecamatan")
+
 ppl_unique = sorted(df["PPL Baru"].unique())
 colormap_filtered = {k: v for k, v in colormap_ppl.items() if k in ppl_unique}
+geojson_filtered = {"type": "FeatureCollection", "features": [
+    f for f in geojson_full["features"] if f["properties"]["PPL Baru"] in ppl_unique
+]}
 
-geojson_filtered = json.loads(df.to_json())
-
-map_html = build_map_html(
-    map_lat, map_lon,
-    json.dumps(geojson_filtered),
-    json.dumps(colormap_filtered),
-    show_ppl_label,
-)
-
+map_html = build_map(map_lat, map_lon, geojson_filtered, colormap_filtered, show_ppl_label)
 st.components.v1.html(map_html, width=1400, height=750, scrolling=False)
 
 st.markdown("---")
