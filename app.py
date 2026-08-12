@@ -62,8 +62,11 @@ def load_data():
     return features, map_lat, map_lon
 
 
-def build_map(map_lat, map_lon, features, colormap, show_label):
-    m = folium.Map(location=[map_lat, map_lon], zoom_start=11, tiles=None)
+def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, highlight_ids=None):
+    if focus:
+        m = folium.Map(location=[focus[0], focus[1]], zoom_start=focus[2], tiles=None)
+    else:
+        m = folium.Map(location=[map_lat, map_lon], zoom_start=11, tiles=None)
 
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -88,6 +91,8 @@ def build_map(map_lat, map_lon, features, colormap, show_label):
 
     def style_fn(feature):
         ppl = feature["properties"].get("PPL Baru", "")
+        if highlight_ids and feature["properties"].get("idsubsls") in highlight_ids:
+            return {"fillColor": colormap.get(ppl, "#999999"), "color": "#FFD700", "weight": 4, "fillOpacity": 0.65}
         return {"fillColor": colormap.get(ppl, "#999999"), "color": "#333333", "weight": 1.2, "fillOpacity": 0.55}
 
     def highlight_fn(feature):
@@ -170,6 +175,17 @@ show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
 show_table = st.sidebar.toggle("Tampilkan Tabel Data", value=False)
 show_legend = st.sidebar.toggle("Tampilkan Legenda Warna", value=True)
 
+st.sidebar.header("Pencarian")
+search_code = st.sidebar.text_input(
+    "Kode ID SubSLS / SLS",
+    placeholder="mis: 6105120003002500",
+).strip()
+
+search_desa = st.sidebar.selectbox(
+    "Cari berdasarkan Desa",
+    ["-- Pilih Desa --"] + sorted(set(f["properties"]["nmdesa"] for f in features_all)),
+)
+
 st.sidebar.header("Filter")
 filter_level = st.sidebar.radio("Filter berdasarkan:", ["Semua", "Kecamatan", "Desa", "PPL", "PML", "PJ Kuda"])
 
@@ -204,12 +220,36 @@ if not filtered:
     st.warning("Tidak ada data yang cocok dengan filter yang dipilih.")
     st.stop()
 
+focus = None
+highlight_ids = None
+search_msg = None
+
+if search_code:
+    target = next((f for f in filtered if f["properties"].get("idsubsls") == search_code), None)
+    if target is None:
+        target = next((f for f in features_all if f["properties"].get("idsubsls") == search_code), None)
+    if target:
+        props = target["properties"]
+        focus = (props["centroid_lat"], props["centroid_lon"], 16)
+        highlight_ids = {search_code}
+        search_msg = f"Lokasi ditemukan: {props.get('nmsls','-')}, Desa {props.get('nmdesa','-')}, Kec. {props.get('nmkec','-')} — PPL: {props.get('PPL Baru','-')}"
+    else:
+        search_msg = f"Kode '{search_code}' tidak ditemukan di data."
+elif search_desa != "-- Pilih Desa --":
+    target = next(f for f in features_all if f["properties"].get("nmdesa") == search_desa)
+    props = target["properties"]
+    focus = (props["centroid_lat"], props["centroid_lon"], 13)
+    search_msg = f"Menampilkan Desa {search_desa}, Kec. {props.get('nmkec','-')}"
+
+if search_msg:
+    st.info(search_msg)
+
 st.caption(f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan")
 
 ppl_unique = sorted(set(f["properties"]["PPL Baru"] for f in filtered))
 colormap_filtered = {k: v for k, v in colormap_ppl.items() if k in ppl_unique}
 
-map_html = build_map(map_lat, map_lon, filtered, colormap_filtered, show_ppl_label)
+map_html = build_map(map_lat, map_lon, filtered, colormap_filtered, show_ppl_label, focus, highlight_ids)
 st.components.v1.html(map_html, width=1400, height=750, scrolling=False)
 
 st.markdown("---")
