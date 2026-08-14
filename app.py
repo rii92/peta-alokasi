@@ -173,37 +173,38 @@ def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, high
         fg_label.add_to(m)
 
     if assign_points is not None and len(assign_points) > 0 and show_points:
+        fg_pts = folium.FeatureGroup(name="Titik KK / Bangunan", show=True)
+        for _, r in assign_points.iterrows():
+            popup_pts = f"""<div style='font-family:Arial;min-width:200px'>
+                <b style='font-size:13px'>{r['nama_kk']}</b><hr style='margin:4px 0'>
+                <b>Nomor Bangunan:</b> {r['nomor_bangunan']}<br>
+                <b>Nomor Rumah Tangga:</b> {r['nomor_rumah_tangga']}<br>
+                <b>SubSLS:</b> {r.get('nama_subsls','-')}<br>
+                <b>Status:</b> {r.get('status_assignment','-')}</div>"""
+            folium.CircleMarker(
+                location=[r["latitude"], r["longitude"]], radius=5,
+                color="#000000", weight=1.5,
+                fill=True, fill_color="#FF5500", fill_opacity=1.0,
+                popup=folium.Popup(popup_pts, max_width=280),
+                tooltip=f"{r['nama_kk']} · Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}",
+            ).add_to(fg_pts)
+        fg_pts.add_to(m)
         if show_point_labels:
-            fg_pts = folium.FeatureGroup(name="Titik KK / Bangunan", show=True)
+            fg_lbl = folium.FeatureGroup(name="Label KK (nama_kk)", show=True)
             for _, r in assign_points.iterrows():
                 pts_center = f"""<div style="
                     color:#222;font-weight:bold;font-size:12px;white-space:nowrap;
                     font-family:Arial;text-align:center;line-height:1.15;
-                    background-color:rgba(255,255,255,0.85);padding:1px 4px;border-radius:2px;
-                    border:1px solid #444;
+                    background-color:rgba(255,255,255,0.92);padding:1px 5px;border-radius:3px;
+                    border:1.5px solid #333;box-shadow:1px 1px 3px rgba(0,0,0,0.5);
                 ">{r['nama_kk']}<br>
                 <span style="font-size:10px;font-weight:normal">Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}</span></div>"""
                 folium.Marker(
                     location=[r["latitude"], r["longitude"]],
-                    icon=DivIcon(html=pts_center, icon_size=(140, 26), icon_anchor=(70, 13)),
+                    icon=DivIcon(html=pts_center, icon_size=(150, 28), icon_anchor=(75, 46)),
                     tooltip=f"{r['nama_kk']} · Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}",
-                ).add_to(fg_pts)
-            fg_pts.add_to(m)
-        else:
-            mc2 = MarkerCluster(name="Titik KK / Bangunan").add_to(m)
-            for _, r in assign_points.iterrows():
-                popup_pts = f"""<div style='font-family:Arial;min-width:200px'>
-                    <b style='font-size:13px'>{r['nama_kk']}</b><hr style='margin:4px 0'>
-                    <b>Nomor Bangunan:</b> {r['nomor_bangunan']}<br>
-                    <b>Nomor Rumah Tangga:</b> {r['nomor_rumah_tangga']}<br>
-                    <b>SubSLS:</b> {r.get('nama_subsls','-')}<br>
-                    <b>Status:</b> {r.get('status_assignment','-')}</div>"""
-                folium.CircleMarker(
-                    location=[r["latitude"], r["longitude"]], radius=3,
-                    color="#ff6600", fill=True, fill_color="#ff6600", fill_opacity=0.7,
-                    popup=folium.Popup(popup_pts, max_width=280),
-                    tooltip=r["nama_kk"],
-                ).add_to(mc2)
+                ).add_to(fg_lbl)
+            fg_lbl.add_to(m)
 
     folium.LayerControl(collapsed=False).add_to(m)
     return m.get_root().render()
@@ -295,6 +296,19 @@ if search_msg:
 filtered_ids = set(f["properties"].get("idsubsls") for f in filtered)
 if search_code and highlight_ids:
     assign_points = assign_all[assign_all["kode_subsls"].isin(highlight_ids)].copy()
+    if len(assign_points) == 0:
+        target = next((f for f in features_all if f["properties"].get("idsubsls") == search_code), None)
+        if target:
+            desa_of_code = target["properties"].get("nmdesa")
+            kec_of_code = target["properties"].get("nmkec")
+            desa_ids = {
+                f["properties"].get("idsubsls")
+                for f in features_all
+                if f["properties"].get("nmdesa") == desa_of_code and f["properties"].get("nmkec") == kec_of_code
+            }
+            assign_points = assign_all[assign_all["kode_subsls"].isin(desa_ids)].copy()
+            if len(assign_points) > 0:
+                st.info(f"Kode tidak punya titik KK, ditampilkan titik seluruh desa {desa_of_code} ({len(assign_points)} titik).")
 else:
     assign_points = assign_all[assign_all["kode_subsls"].isin(filtered_ids)].copy()
 
