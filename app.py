@@ -312,7 +312,7 @@ if search_code and highlight_ids:
 else:
     assign_points = assign_all[assign_all["kode_subsls"].isin(filtered_ids)].copy()
 
-show_point_labels = show_kk_labels and len(assign_points) <= 500
+show_point_labels = show_kk_labels
 
 st.caption(
     f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan"
