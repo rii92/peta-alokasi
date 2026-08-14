@@ -75,7 +75,7 @@ def load_data():
 
 
 def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, highlight_ids=None,
-              assign_points=None, show_points=False, show_point_labels=False):
+              assign_points=None, show_points=False):
     if focus:
         m = folium.Map(location=[focus[0], focus[1]], zoom_start=focus[2], tiles=None)
     else:
@@ -189,22 +189,6 @@ def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, high
                 tooltip=f"{r['nama_kk']} · Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}",
             ).add_to(fg_pts)
         fg_pts.add_to(m)
-        if show_point_labels:
-            fg_lbl = folium.FeatureGroup(name="Label KK (nama_kk)", show=True)
-            for _, r in assign_points.iterrows():
-                pts_center = f"""<div style="
-                    color:#222;font-weight:bold;font-size:12px;white-space:nowrap;
-                    font-family:Arial;text-align:center;line-height:1.15;
-                    background-color:rgba(255,255,255,0.92);padding:1px 5px;border-radius:3px;
-                    border:1.5px solid #333;box-shadow:1px 1px 3px rgba(0,0,0,0.5);
-                ">{r['nama_kk']}<br>
-                <span style="font-size:10px;font-weight:normal">Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}</span></div>"""
-                folium.Marker(
-                    location=[r["latitude"], r["longitude"]],
-                    icon=DivIcon(html=pts_center, icon_size=(150, 28), icon_anchor=(75, 46)),
-                    tooltip=f"{r['nama_kk']} · Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}",
-                ).add_to(fg_lbl)
-            fg_lbl.add_to(m)
 
     folium.LayerControl(collapsed=False).add_to(m)
     return m.get_root().render()
@@ -220,7 +204,6 @@ st.title("Peta Wilayah Tugas PPL, PML & PJ Kuda - Kab. Sanggau")
 st.sidebar.header("Opsi Tampilan")
 show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
 show_kk_points = st.sidebar.toggle("Tampilkan Titik KK / Bangunan", value=False)
-show_kk_labels = st.sidebar.toggle("Tampilkan Label KK (nama_kk)", value=True)
 show_table = st.sidebar.toggle("Tampilkan Tabel Data", value=False)
 show_legend = st.sidebar.toggle("Tampilkan Legenda Warna", value=True)
 
@@ -312,8 +295,6 @@ if search_code and highlight_ids:
 else:
     assign_points = assign_all[assign_all["kode_subsls"].isin(filtered_ids)].copy()
 
-show_point_labels = show_kk_labels
-
 st.caption(
     f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan"
     f"{' · ' + str(len(assign_points)) + ' titik KK/bangunan' if show_kk_points else ''}"
@@ -324,7 +305,7 @@ colormap_filtered = {k: v for k, v in colormap_ppl.items() if k in ppl_unique}
 
 map_html = build_map(
     map_lat, map_lon, filtered, colormap_filtered, show_ppl_label,
-    focus, highlight_ids, assign_points, show_kk_points, show_point_labels,
+    focus, highlight_ids, assign_points, show_kk_points,
 )
 st.components.v1.html(map_html, width=1400, height=750, scrolling=False)
 
