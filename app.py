@@ -9,6 +9,7 @@ st.set_page_config(page_title="Peta Wilayah Tugas Mitra - Sanggau", layout="wide
 
 GEOJSON_PATH = "Final_SLS_202516105.geojson"
 EXCEL_PATH = "data-alokasi-petugas.xlsx"
+ASSIGNMENT_PATH = "data-assignment.xlsx"
 CMAP = [
     "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
     "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
@@ -59,10 +60,22 @@ def load_data():
     all_lons = [f["properties"]["centroid_lon"] for f in features]
     map_lat = sum(all_lats) / len(all_lats) if all_lats else 0
     map_lon = sum(all_lons) / len(all_lons) if all_lons else 0
-    return features, map_lat, map_lon
+
+    assign = pd.read_csv(ASSIGNMENT_PATH, sep="\t")
+    assign = assign.dropna(subset=["latitude", "longitude"])
+    assign["kode_subsls"] = assign["kode_subsls"].astype(str).str.strip()
+    assign["nama_kk"] = assign["nama_kk"].fillna("-").astype(str)
+    assign["nomor_bangunan"] = assign["nomor_bangunan"].apply(
+        lambda v: str(int(v)) if pd.notna(v) and float(v) == int(float(v)) else ("-" if pd.notna(v) else "-")
+    )
+    assign["nomor_rumah_tangga"] = assign["nomor_rumah_tangga"].apply(
+        lambda v: str(int(v)) if pd.notna(v) and float(v) == int(float(v)) else ("-" if pd.notna(v) else "-")
+    )
+    return features, map_lat, map_lon, assign
 
 
-def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, highlight_ids=None):
+def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, highlight_ids=None,
+              assign_points=None, show_points=False, show_point_labels=False):
     if focus:
         m = folium.Map(location=[focus[0], focus[1]], zoom_start=focus[2], tiles=None)
     else:
@@ -159,11 +172,44 @@ def build_map(map_lat, map_lon, features, colormap, show_label, focus=None, high
             ).add_to(fg_label)
         fg_label.add_to(m)
 
+    if assign_points is not None and len(assign_points) > 0 and show_points:
+        if show_point_labels:
+            fg_pts = folium.FeatureGroup(name="Titik KK / Bangunan", show=True)
+            for _, r in assign_points.iterrows():
+                pts_center = f"""<div style="
+                    color:#222;font-weight:bold;font-size:12px;white-space:nowrap;
+                    font-family:Arial;text-align:center;line-height:1.15;
+                    background-color:rgba(255,255,255,0.85);padding:1px 4px;border-radius:2px;
+                    border:1px solid #444;
+                ">{r['nama_kk']}<br>
+                <span style="font-size:10px;font-weight:normal">Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}</span></div>"""
+                folium.Marker(
+                    location=[r["latitude"], r["longitude"]],
+                    icon=DivIcon(html=pts_center, icon_size=(140, 26), icon_anchor=(70, 13)),
+                    tooltip=f"{r['nama_kk']} · Bgn {r['nomor_bangunan']} · RT {r['nomor_rumah_tangga']}",
+                ).add_to(fg_pts)
+            fg_pts.add_to(m)
+        else:
+            mc2 = MarkerCluster(name="Titik KK / Bangunan").add_to(m)
+            for _, r in assign_points.iterrows():
+                popup_pts = f"""<div style='font-family:Arial;min-width:200px'>
+                    <b style='font-size:13px'>{r['nama_kk']}</b><hr style='margin:4px 0'>
+                    <b>Nomor Bangunan:</b> {r['nomor_bangunan']}<br>
+                    <b>Nomor Rumah Tangga:</b> {r['nomor_rumah_tangga']}<br>
+                    <b>SubSLS:</b> {r.get('nama_subsls','-')}<br>
+                    <b>Status:</b> {r.get('status_assignment','-')}</div>"""
+                folium.CircleMarker(
+                    location=[r["latitude"], r["longitude"]], radius=3,
+                    color="#ff6600", fill=True, fill_color="#ff6600", fill_opacity=0.7,
+                    popup=folium.Popup(popup_pts, max_width=280),
+                    tooltip=r["nama_kk"],
+                ).add_to(mc2)
+
     folium.LayerControl(collapsed=False).add_to(m)
     return m.get_root().render()
 
 
-features_all, map_lat, map_lon = load_data()
+features_all, map_lat, map_lon, assign_all = load_data()
 
 ppl_all = sorted(set(f["properties"]["PPL Baru"] for f in features_all))
 colormap_ppl = {name: CMAP[i % len(CMAP)] for i, name in enumerate(ppl_all)}
@@ -172,6 +218,8 @@ st.title("Peta Wilayah Tugas PPL, PML & PJ Kuda - Kab. Sanggau")
 
 st.sidebar.header("Opsi Tampilan")
 show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
+show_kk_points = st.sidebar.toggle("Tampilkan Titik KK / Bangunan", value=False)
+show_kk_labels = st.sidebar.toggle("Tampilkan Label KK (nama_kk)", value=False)
 show_table = st.sidebar.toggle("Tampilkan Tabel Data", value=False)
 show_legend = st.sidebar.toggle("Tampilkan Legenda Warna", value=True)
 
@@ -244,12 +292,26 @@ elif search_desa != "-- Pilih Desa --":
 if search_msg:
     st.info(search_msg)
 
-st.caption(f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan")
+filtered_ids = set(f["properties"].get("idsubsls") for f in filtered)
+if search_code and highlight_ids:
+    assign_points = assign_all[assign_all["kode_subsls"].isin(highlight_ids)].copy()
+else:
+    assign_points = assign_all[assign_all["kode_subsls"].isin(filtered_ids)].copy()
+
+show_point_labels = show_kk_labels and len(assign_points) <= 150
+
+st.caption(
+    f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan"
+    f"{' · ' + str(len(assign_points)) + ' titik KK/bangunan' if show_kk_points else ''}"
+)
 
 ppl_unique = sorted(set(f["properties"]["PPL Baru"] for f in filtered))
 colormap_filtered = {k: v for k, v in colormap_ppl.items() if k in ppl_unique}
 
-map_html = build_map(map_lat, map_lon, filtered, colormap_filtered, show_ppl_label, focus, highlight_ids)
+map_html = build_map(
+    map_lat, map_lon, filtered, colormap_filtered, show_ppl_label,
+    focus, highlight_ids, assign_points, show_kk_points, show_point_labels,
+)
 st.components.v1.html(map_html, width=1400, height=750, scrolling=False)
 
 st.markdown("---")
