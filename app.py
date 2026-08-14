@@ -220,7 +220,7 @@ st.title("Peta Wilayah Tugas PPL, PML & PJ Kuda - Kab. Sanggau")
 st.sidebar.header("Opsi Tampilan")
 show_ppl_label = st.sidebar.toggle("Tampilkan Nama PPL di Peta", value=False)
 show_kk_points = st.sidebar.toggle("Tampilkan Titik KK / Bangunan", value=False)
-show_kk_labels = st.sidebar.toggle("Tampilkan Label KK (nama_kk)", value=False)
+show_kk_labels = st.sidebar.toggle("Tampilkan Label KK (nama_kk)", value=True)
 show_table = st.sidebar.toggle("Tampilkan Tabel Data", value=False)
 show_legend = st.sidebar.toggle("Tampilkan Legenda Warna", value=True)
 
@@ -312,7 +312,7 @@ if search_code and highlight_ids:
 else:
     assign_points = assign_all[assign_all["kode_subsls"].isin(filtered_ids)].copy()
 
-show_point_labels = show_kk_labels and len(assign_points) <= 150
+show_point_labels = show_kk_labels and len(assign_points) <= 500
 
 st.caption(
     f"Menampilkan {len(filtered)} subSLS teralokasi dari {len(set(f['properties']['nmkec'] for f in filtered))} kecamatan"
