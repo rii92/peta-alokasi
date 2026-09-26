@@ -7,7 +7,10 @@ Level 6 (subSLS) susunan kode BPS:
     contoh: 61 05 060 005 0007 00 -> 6105060005000700
 
 Cara pakai:
-    python ambil_level6fullcode.py                          # pakai data-assignment bawaan
+    python ambil_level6fullcode.py 0.425 110.8819            # satu titik, tampil di terminal
+    python ambil_level6fullcode.py 0.425 110.8819 -q         # hanya cetak kode
+    python ambil_level6fullcode.py 0.425 110.8819 0.36 110.69 # beberapa titik
+    python ambil_level6fullcode.py                          # data-assignment bawaan -> csv
     python ambil_level6fullcode.py data-bangunan.xlsx      # file lain (xlsx/csv/tsv)
     python ambil_level6fullcode.py titik.txt               # teks: lat,lon per baris
     python ambil_level6fullcode.py -o hasil.csv            # ganti nama file hasil
@@ -264,30 +267,115 @@ def enrich(df, lat_col, lon_col, locator, prefix=""):
     return df
 
 
+def print_single(lat, lon, locator):
+    """Cetak level6fullcode untuk satu titik ke terminal."""
+    rec = locator.find(lat, lon)
+    print("=" * 52)
+    print(f"Latitude   : {lat}")
+    print(f"Longitude  : {lon}")
+    print("-" * 52)
+    if rec is None:
+        print("level6fullcode : TIDAK DITEMUKAN")
+        print("Titik ini berada di luar area Sanggau / tidak ada polygon yang memuat.")
+        print("=" * 52)
+        return
+
+    print(f"level6fullcode : {rec.get('idsubsls')}")
+    print("-" * 52)
+    print(f"  kdprov  ({rec.get('kdprov')}) : {rec.get('nmprov')}")
+    print(f"  kdkab   ({rec.get('kdkab')}) : {rec.get('nmkab')}")
+    print(f"  kdkec   ({rec.get('kdkec')}) : {rec.get('nmkec')}")
+    print(f"  kddesa  ({rec.get('kddesa')}) : {rec.get('nmdesa')}")
+    print(f"  kdsls   ({rec.get('kdsls')}) : {rec.get('nmsls')}")
+    print(f"  kdsubsls({rec.get('kdsubsls')})")
+    print("=" * 52)
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Ambil level6fullcode dari titik koordinat")
-    ap.add_argument("input", nargs="?", help="file titik (xlsx/csv/tsv/txt). Kosong = data-assignment bawaan")
-    ap.add_argument("-o", "--output", default="titik_level6fullcode.csv", help="file hasil")
+    ap = argparse.ArgumentParser(
+        description="Ambil level6fullcode dari titik koordinat",
+        epilog=(
+            "contoh:\n"
+            "  python ambil_level6fullcode.py 0.425 110.8819\n"
+            "  python ambil_level6fullcode.py 0.425 110.8819 0.363 110.697\n"
+            "  python ambil_level6fullcode.py data-bangunan.xlsx -o hasil.csv"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument(
+        "input", nargs="*",
+        help="koordinat (lat lon ...) atau nama file titik. Kosong = data-assignment bawaan",
+    )
+    ap.add_argument("-o", "--output", default="titik_level6fullcode.csv", help="file hasil (mode file)")
     ap.add_argument("--no-shapely", action="store_true", help="paksa mode pure-python")
+    ap.add_argument("-q", "--quiet", action="store_true", help="hanya cetak kode, tanpa keterangan")
     args = ap.parse_args()
 
+    # mode koordinat langsung: semua argumen positional berupa angka
+    coords = []
+    for token in args.input:
+        try:
+            coords.append(float(token))
+        except ValueError:
+            coords = []
+            break
+
+    is_coord_mode = len(coords) >= 2 and len(coords) % 2 == 0
+
+    if len(args.input) == 1 and len(coords) == 1:
+        raise SystemExit(
+            f"Koordinat harus berpasangan (latitude lalu longitude).\n"
+            f"Contoh: python ambil_level6fullcode.py {args.input[0]} 110.8819"
+        )
+
     records, geometries = load_polygons()
-    print(f"[info] polygon dimuat: {len(records)}")
+    if not is_coord_mode:
+        print(f"[info] polygon dimuat: {len(records)}")
     locator = build_locator(records, geometries, prefer_shapely=not args.no_shapely)
 
-    df, lat_col, lon_col = read_points(args.input)
-    print(f"[info] titik dimuat: {len(df)} baris dari {args.input or DEFAULT_INPUT}")
+    # ---- mode koordinat langsung ----
+    if is_coord_mode:
+        pairs = list(zip(coords[0::2], coords[1::2]))
+        if args.quiet:
+            for lat, lon in pairs:
+                rec = locator.find(lat, lon)
+                print(rec.get("idsubsls") if rec else "TIDAK_DITEMUKAN")
+        else:
+            for n, (lat, lon) in enumerate(pairs, 1):
+                if len(pairs) > 1:
+                    print(f"\n### Titik {n} dari {len(pairs)}")
+                print_single(lat, lon, locator)
+        return
+
+    # ---- mode file ----
+    file_arg = args.input[0] if args.input else None
+    if args.input and len(coords) == len(args.input) and len(args.input) > 1:
+        raise SystemExit(
+            f"Jumlah koordinat harus genap (latitude lalu longitude), "
+            f"tapi ada {len(args.input)} angka.\n"
+            f"Contoh: python ambil_level6fullcode.py {args.input[0]} {args.input[1]}"
+        )
+    if args.input and len(args.input) > 1:
+        raise SystemExit(
+            f"Argumen tidak dikenali: {args.input[1:]}\n"
+            "Gunakan pasangan angka (lat lon), atau satu nama file."
+        )
+
+    df, lat_col, lon_col = read_points(file_arg)
+    print(f"[info] titik dimuat: {len(df)} baris dari {file_arg or DEFAULT_INPUT}")
 
     out = enrich(df, lat_col, lon_col, locator)
     out.to_csv(args.output, index=False, encoding="utf-8-sig")
     print(f"[info] hasil disimpan: {args.output}")
 
-    if "level6fullcode" in out.columns:
-        found = out[out["level6fullcode"].astype(str) != ""]
-        if len(found):
-            print("\n[contoh 5 baris]")
-            cols = [c for c in ["latitude", "longitude", "level6fullcode", "level6nama_desa", "level6nama_sls"] if c in found.columns]
-            print(found[cols].head(5).to_string(index=False))
+    found = out[out["level6fullcode"].astype(str).str.strip() != ""]
+    if len(found):
+        print("\n[contoh 5 baris]")
+        cols = [
+            c for c in ["latitude", "longitude", "level6fullcode", "level6nama_desa", "level6nama_sls"]
+            if c in found.columns
+        ]
+        print(found[cols].head(5).to_string(index=False))
 
 
 if __name__ == "__main__":
