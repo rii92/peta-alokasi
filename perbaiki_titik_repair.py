@@ -6,18 +6,21 @@ KE DALAM poligon Final_SLS yang sesuai.
 Yang dimaksud "poligon yang sesuai" = poligon pada Final_SLS_202516105.geojson
 yang idsubsls-nya sama dengan kolom level_6_full_code pada titik tersebut.
 
-Untuk setiap titik flag_repair = 1:
-  - jika sudah berada di dalam poligon target  -> tidak digeser (status SUDAH_SESUAI)
-  - jika di luar poligon target               -> digeser ke titik terdekat yang
-                                                  masih di dalam poligon (DIPINDAHKAN)
-  - jika kode target tidak ada di Final_SLS   -> dibiarkan (POLIGON_TIDAK_DITEMUKAN)
+Aturan:
+  - flag_repair = 0 : titik sudah benar, TIDAK dipindah (status TIDAK_DIPINDAH)
+  - flag_repair = 1 : diperbaiki:
+        * sudah di dalam poligon target -> tidak digeser (SUDAH_SESUAI)
+        * di luar poligon target        -> digeser ke titik terdekat yang masih
+                                           di dalam poligon (DIPINDAHKAN)
+        * kode target tidak ada di SLS  -> dibiarkan (POLIGON_TIDAK_DITEMUKAN)
 
 Hasil:
-  - GPKG  : layer baru berisi titik yang sudah diperbaiki
+  - GPKG  : layer baru berisi titik (flag_repair=0 tetap, flag_repair=1 diperbaiki)
   - CSV   : ringkasan kode lama -> kode target + status tiap titik
 
 Cara pakai:
-    python perbaiki_titik_repair.py
+    python perbaiki_titik_repair.py                       # semua titik
+    python perbaiki_titik_repair.py --only-repair         # hanya flag_repair=1
     python perbaiki_titik_repair.py --input hasil_identifikasi_titik.gpkg \
         --out-gpkg hasil_identifikasi_titik_repaired.gpkg --out-csv ringkasan_repair.csv
 """
@@ -124,10 +127,13 @@ def main():
     ap.add_argument("--layer", default=LAYER_IN)
     ap.add_argument("--out-gpkg", default=GPKG_OUT)
     ap.add_argument("--out-csv", default=CSV_OUT)
+    ap.add_argument("--only-repair", action="store_true",
+                    help="hanya proses flag_repair=1 (default: semua titik, flag_repair=0 dibiarkan)")
     args = ap.parse_args()
 
-    print(f"[1/4] baca titik flag_repair=1 dari {args.input} ...")
-    g = gpd.read_file(args.input, layer=args.layer, where="flag_repair = 1")
+    where = "flag_repair = 1" if args.only_repair else None
+    print(f"[1/4] baca titik dari {args.input}" + (" (hanya flag_repair=1)" if where else " (semua titik)") + " ...")
+    g = gpd.read_file(args.input, layer=args.layer, where=where)
     if g.crs is None:
         g = g.set_crs("EPSG:4326")
     print(f"      {len(g)} titik")
@@ -136,29 +142,35 @@ def main():
     polys = load_polygons()
     print(f"      {len(polys)} polygon")
 
-    print("[3/4] proses geser tiap titik ...")
-    moved = []
+    print("[3/4] proses tiap titik ...")
     statuses = []
     jarak = []
     kode_target_list = []
     new_geoms = []
-    counts = {"SUDAH_SESUAI": 0, "DIPINDAHKAN": 0, "POLIGON_TIDAK_DITEMUKAN": 0, "KOORDINAT_INVALID": 0}
+    counts = {
+        "TIDAK_DIPINDAH": 0, "SUDAH_SESUAI": 0, "DIPINDAHKAN": 0,
+        "POLIGON_TIDAK_DITEMUKAN": 0, "KOORDINAT_INVALID": 0,
+    }
 
     for row in g.itertuples():
         pt = row.geometry
         kode_target = str(getattr(row, "level_6_full_code") or "").strip()
         kode_geometris = str(getattr(row, "idsubsls") or "").strip()
+        flag = int(getattr(row, "flag_repair", 0) or 0)
 
+        # flag_repair=0 -> titik sudah benar, JANGAN dipindah
+        if flag == 0:
+            status = "TIDAK_DIPINDAH"
+            new_pt = pt
         # kode target divalidasi dulu
-        target = polys.get(kode_target)
-        if pt is None or pt.is_empty or not isinstance(pt, Point) or not (-90 <= pt.y <= 90):
+        elif pt is None or pt.is_empty or not isinstance(pt, Point) or not (-90 <= pt.y <= 90):
             status = "KOORDINAT_INVALID"
             new_pt = pt
-        elif target is None:
+        elif polys.get(kode_target) is None:
             status = "POLIGON_TIDAK_DITEMUKAN"
             new_pt = pt
         else:
-            poly = target["geometry"]
+            poly = polys[kode_target]["geometry"]
             if poly.contains(pt) or poly.covers(pt):
                 status = "SUDAH_SESUAI"
                 new_pt = pt
@@ -167,7 +179,7 @@ def main():
                 status = "DIPINDAHKAN"
 
         d = 0.0
-        if new_pt is not None and pt is not None and isinstance(pt, Point):
+        if new_pt is not None and pt is not None and isinstance(pt, Point) and isinstance(new_pt, Point):
             d = haversine_m(pt.y, pt.x, new_pt.y, new_pt.x)
 
         new_geoms.append(new_pt)
