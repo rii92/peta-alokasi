@@ -6,3 +6,7 @@ dist/
 build/
 .env
 hasil_level6fullcode.csv
+titik_level6fullcode.csv
+*.gpkg
+ringkasan_repair.csv
+data-bangunan.xlsx
