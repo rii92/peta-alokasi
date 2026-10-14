@@ -9,4 +9,6 @@ hasil_level6fullcode.csv
 titik_level6fullcode.csv
 *.gpkg
 ringkasan_repair.csv
+ringkasan_repair2.csv
+flag0_di_luar_poligon.csv
 data-bangunan.xlsx

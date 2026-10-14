@@ -28,9 +28,9 @@ Cara pakai:
 import argparse
 import json
 import math
+from pathlib import Path
 
 import geopandas as gpd
-import pandas as pd
 from shapely.geometry import Point, shape
 from shapely.ops import nearest_points
 
@@ -40,15 +40,6 @@ SERIES = "Final_SLS_202516105.geojson"
 GPKG_OUT = "hasil_identifikasi_titik_repaired.gpkg"
 LAYER_OUT = "hasil_identifikasi_titik_repaired"
 CSV_OUT = "ringkasan_repair.csv"
-
-# kolom yang dipertahankan pada CSV ringkasan
-SUMMARY_COLS = [
-    "id_assignment", "kode_lama", "kode_geometris_asli", "kode_target",
-    "status_repair", "jarak_geser_m",
-    "target_kdkec", "target_nmkec", "target_kddesa", "target_nmdesa",
-    "target_idsls", "target_nmsls",
-    "latitude_origin", "longitude_origin", "longitude_baru", "latitude_baru",
-]
 
 
 # --------------------------------------------------------------------------
@@ -121,11 +112,20 @@ def load_polygons(path=SERIES):
     return polys
 
 
+def pick_col(df, *names):
+    for n in names:
+        if n in df.columns:
+            return n
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Perbaiki titik flag_repair=1 masuk ke poligon Final_SLS")
     ap.add_argument("--input", default=GPKG_IN)
     ap.add_argument("--layer", default=LAYER_IN)
     ap.add_argument("--out-gpkg", default=GPKG_OUT)
+    ap.add_argument("--layer-out", default=None,
+                    help="nama layer output (default: nama file gpkg tanpa ekstensi)")
     ap.add_argument("--out-csv", default=CSV_OUT)
     ap.add_argument("--only-repair", action="store_true",
                     help="hanya proses flag_repair=1 (default: semua titik, flag_repair=0 dibiarkan)")
@@ -137,6 +137,17 @@ def main():
     if g.crs is None:
         g = g.set_crs("EPSG:4326")
     print(f"      {len(g)} titik")
+
+    # deteksi nama kolom (berbeda antar file)
+    id_col = pick_col(g, "id_assignment", "assignment_id")
+    subsls_col = pick_col(g, "idsubsls", "idsubsls_origin", "idsubsls_asli")
+    code_col = pick_col(g, "level_6_full_code", "level6fullcode")
+    flag_col = pick_col(g, "flag_repair")
+    if code_col is None:
+        raise SystemExit(f"Kolom kode target (level_6_full_code) tidak ditemukan. Kolom: {list(g.columns)}")
+    if flag_col is None:
+        raise SystemExit(f"Kolom flag_repair tidak ditemukan. Kolom: {list(g.columns)}")
+    print(f"      kolom -> id={id_col} | subsls={subsls_col} | kode={code_col} | flag={flag_col}")
 
     print(f"[2/4] muat poligon {SERIES} ...")
     polys = load_polygons()
@@ -154,9 +165,8 @@ def main():
 
     for row in g.itertuples():
         pt = row.geometry
-        kode_target = str(getattr(row, "level_6_full_code") or "").strip()
-        kode_geometris = str(getattr(row, "idsubsls") or "").strip()
-        flag = int(getattr(row, "flag_repair", 0) or 0)
+        kode_target = str(getattr(row, code_col) or "").strip()
+        flag = int(getattr(row, flag_col, 0) or 0)
 
         # flag_repair=0 -> titik sudah benar, JANGAN dipindah
         if flag == 0:
@@ -189,13 +199,16 @@ def main():
         counts[status] = counts.get(status, 0) + 1
 
     out = g.copy()
-    out["kode_lama"] = out["level_6_full_code"]
-    out["kode_geometris_asli"] = out["idsubsls"]
+    out["kode_lama"] = out[code_col]
+    if subsls_col:
+        out["kode_geometris_asli"] = out[subsls_col]
     out["kode_target"] = kode_target_list
     out["status_repair"] = statuses
     out["jarak_geser_m"] = jarak
-    out["longitude_origin"] = g.geometry.x
-    out["latitude_origin"] = g.geometry.y
+    if "longitude_origin" not in out.columns:
+        out["longitude_origin"] = g.geometry.x
+    if "latitude_origin" not in out.columns:
+        out["latitude_origin"] = g.geometry.y
     out = out.set_geometry(gpd.GeoSeries(new_geoms, index=out.index, crs="EPSG:4326"))
     out["longitude_baru"] = out.geometry.x
     out["latitude_baru"] = out.geometry.y
@@ -209,10 +222,18 @@ def main():
         out[col] = [polys[c][key] if c in polys else None for c in kode_target_list]
 
     print("[4/4] tulis hasil ...")
+    layer_out = args.layer_out or Path(args.out_gpkg).stem
     if args.out_gpkg:
-        out.to_file(args.out_gpkg, layer=LAYER_OUT, driver="GPKG")
-        print(f"      GPKG : {args.out_gpkg} (layer {LAYER_OUT})")
-    summary = out[[c for c in SUMMARY_COLS if c in out.columns]]
+        out.to_file(args.out_gpkg, layer=layer_out, driver="GPKG")
+        print(f"      GPKG : {args.out_gpkg} (layer {layer_out})")
+    summary_cols = [
+        id_col, "kode_lama", "kode_geometris_asli", "kode_target",
+        "status_repair", "jarak_geser_m",
+        "target_kdkec", "target_nmkec", "target_kddesa", "target_nmdesa",
+        "target_idsls", "target_nmsls",
+        "latitude_origin", "longitude_origin", "longitude_baru", "latitude_baru",
+    ]
+    summary = out[[c for c in summary_cols if c in out.columns]]
     summary.to_csv(args.out_csv, index=False, encoding="utf-8-sig")
     print(f"      CSV  : {args.out_csv}")
 
